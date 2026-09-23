@@ -136,6 +136,7 @@ services:
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_API_HOST=${OPENAI_API_HOST:-}
+      - OPENAI_PROXY=${OPENAI_PROXY:-}
       - GIT_USER_NAME=${GIT_USER_NAME:-AnyModule Agent}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@example.com}
     depends_on:
