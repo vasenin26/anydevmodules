@@ -14,7 +14,9 @@
 # Запуск:
 #   cp .env.example .env   # заполнить APP_KEY, OPENAI_*, GIT_*
 #   docker compose up -d --build
-#   # создать агента в UI docmodule, вписать его JWT в ORCHESTRATOR_TOKEN
+#   # зарегистрировать первого пользователя в UI, затем выпустить токен оркестратора:
+#   docker compose exec docmodule php artisan db:seed --class=OrchestratorAgentSeeder --force
+#   # вписать выведенный JWT в ORCHESTRATOR_TOKEN
 #   docker compose up -d agentmanager
 # ═══════════════════════════════════════════════════════════════
 

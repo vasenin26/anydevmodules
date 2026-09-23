@@ -54,11 +54,27 @@ git submodule update --init --recursive
 
    Сервис `agentmodule` только собирает образ агента и сразу завершается — это нормально.
 
-3. Открыть http://localhost:8000, создать проект и агента, скопировать токен агента в `ORCHESTRATOR_TOKEN` в `.env` и перезапустить оркестратор:
+3. Выпустить токен оркестратора. Это JWT системного агента «Orchestrator Agent» с `has_cross_project_access`: он получает задачи всех проектов, и агенты отправляют результаты от его имени.
+
+   Сначала зарегистрировать первого пользователя на http://localhost:8000 — сидер создаёт системный проект с `owner_id=1`. Затем:
+
+   ```bash
+   docker compose exec docmodule php artisan db:seed --class=OrchestratorAgentSeeder --force
+   ```
+
+   Сидер выведет `JWT Token: ...`. Если агент уже создан, сидер токен не печатает — его можно достать так:
+
+   ```bash
+   docker compose exec docmodule php artisan tinker --execute="echo App\Models\Agent::where('has_cross_project_access', true)->value('token');"
+   ```
+
+   Записать токен в `ORCHESTRATOR_TOKEN` в `.env` и пересоздать оркестратор:
 
    ```bash
    docker compose up -d agentmanager
    ```
+
+   Токен подписан `APP_KEY`: после смены `APP_KEY` его нужно выпустить заново.
 
 4. Сбор логов (Loki + Promtail), по желанию:
 
