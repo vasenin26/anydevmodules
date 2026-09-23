@@ -1,0 +1,4 @@
+.env
+logs/
+*:Zone.Identifier
+.claude/settings.local.json

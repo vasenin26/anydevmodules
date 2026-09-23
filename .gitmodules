@@ -1,0 +1,12 @@
+[submodule "agentmanager"]
+	path = agentmanager
+	url = git@github.com:vasenin26/agentmanager.git
+[submodule "agentmodule"]
+	path = agentmodule
+	url = git@github.com:vasenin26/agentmodule.git
+[submodule "conversation"]
+	path = conversation
+	url = git@github.com:vasenin26/conversation.git
+[submodule "docmodule"]
+	path = docmodule
+	url = git@github.com:vasenin26/docmodule.git

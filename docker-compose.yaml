@@ -1,0 +1,194 @@
+# ═══════════════════════════════════════════════════════════════
+# AnyModule — локальный запуск всей платформы
+#
+#   docmodule     — Laravel (UI + API), http://localhost:${DOCMODULE_PORT}
+#   db            — PostgreSQL для docmodule
+#   agentmanager  — Go-оркестратор, опрашивает docmodule и запускает агентов
+#   agentmodule   — только сборка образа агента; контейнеры агентов
+#                   создаёт agentmanager через docker.sock
+#   loki/promtail — сбор логов (profile: logging)
+#
+# Библиотека conversation подключается в agentmodule через composer
+# (github.com/vasenin26/conversation), отдельного сервиса у неё нет.
+#
+# Запуск:
+#   cp .env.example .env   # заполнить APP_KEY, OPENAI_*, GIT_*
+#   docker compose up -d --build
+#   # создать агента в UI docmodule, вписать его JWT в ORCHESTRATOR_TOKEN
+#   docker compose up -d agentmanager
+# ═══════════════════════════════════════════════════════════════
+
+name: anymodule
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # docmodule
+  # ─────────────────────────────────────────────────────────────
+  docmodule:
+    build:
+      context: ./docmodule
+      dockerfile: docker/php/Dockerfile
+      target: prod
+    image: anymodule/docmodule:local
+    restart: unless-stopped
+    environment:
+      - APP_ENV=${APP_ENV:-local}
+      - APP_DEBUG=${APP_DEBUG:-true}
+      - APP_KEY=${APP_KEY:?APP_KEY is required (base64:...)}
+      - APP_URL=${DOCMODULE_URL:-http://localhost:8000}
+      - ASSET_URL=${DOCMODULE_URL:-http://localhost:8000}
+      - API_URL=${DOCMODULE_URL:-http://localhost:8000}/api
+      - SESSION_SECURE_COOKIE=false
+      - INERTIA_SSR=false
+      - LOG_CHANNEL=stderr
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=${DB_DATABASE:-laravel}
+      - DB_USERNAME=${DB_USERNAME:-laravel}
+      - DB_PASSWORD=${DB_PASSWORD:-laravel}
+      # docmodule → agentmanager
+      - AGENT_SERVER=http://agentmanager:8080
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_API_HOST:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - REGISTRATION_REQUEST_ONLY=${REGISTRATION_REQUEST_ONLY:-false}
+      - REGISTRATION_REQUEST_ADMIN_EMAIL=${REGISTRATION_REQUEST_ADMIN_EMAIL:-admin@example.com}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - docmodule_storage:/var/www/html/storage
+      - repos:/var/repos
+    ports:
+      # Порт нужен и агентам: они живут в bridge-сети Docker и ходят в docmodule через хост
+      - "${DOCMODULE_PORT:-8000}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - anymodule
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_DATABASE:-laravel}
+      - POSTGRES_USER=${DB_USERNAME:-laravel}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-laravel}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT_HOST:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - anymodule
+
+  # ─────────────────────────────────────────────────────────────
+  # agentmodule — сборка образа агента.
+  # Сервис сразу завершается: он нужен только чтобы
+  # `docker compose up --build` собрал образ ${AGENT_IMAGE}.
+  # ─────────────────────────────────────────────────────────────
+  agentmodule:
+    build:
+      context: ./agentmodule
+      dockerfile: docker/agent/Dockerfile
+      target: orchestrated
+    image: ${AGENT_IMAGE:-anymodule/agentmodule:local}
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    network_mode: none
+
+  # ─────────────────────────────────────────────────────────────
+  # agentmanager
+  # ─────────────────────────────────────────────────────────────
+  agentmanager:
+    build:
+      context: ./agentmanager
+      dockerfile: docker/Dockerfile
+    image: anymodule/agentmanager:local
+    restart: unless-stopped
+    environment:
+      - HTTP_PORT=8080
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - REGISTRY_SERVER=${REGISTRY_SERVER:-}
+      - REGISTRY_USERNAME=${REGISTRY_USERNAME:-}
+      - REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-}
+      - SSH_KEYS_DIR=/app/keys
+      - BOLT_DB_PATH=/app/data/orchestrator.db
+      - ORCHESTRATOR_SOCKET_DIR=/tmp/orchestrator
+      # agentmanager → docmodule (внутри compose-сети)
+      - TASK_API_URL=http://docmodule/api/orchestrator
+      - TASK_API_TOKEN=${ORCHESTRATOR_TOKEN:-}
+      - TASK_API_TIMEOUT=${TASK_API_TIMEOUT:-10s}
+      - TASK_POLL_INTERVAL=${TASK_POLL_INTERVAL:-5s}
+      # Параметры, которые agentmanager прокидывает в контейнеры агентов
+      - AGENT_IMAGE=${AGENT_IMAGE:-anymodule/agentmodule:local}
+      - AGENT_IMAGE_PULL=${AGENT_IMAGE_PULL:-false}
+      - AGENT_MEMORY_LIMIT_MB=${AGENT_MEMORY_LIMIT_MB:-512}
+      - AGENT_API_TOKEN=${ORCHESTRATOR_TOKEN:-}
+      - API_HOST=${AGENT_API_HOST:-http://host.docker.internal:8000/api}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_HOST=${OPENAI_API_HOST:-}
+      - GIT_USER_NAME=${GIT_USER_NAME:-AnyModule Agent}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@example.com}
+    depends_on:
+      docmodule:
+        condition: service_started
+      agentmodule:
+        condition: service_completed_successfully
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Путь должен совпадать на хосте и в контейнере: сокеты command-proxy
+      # монтируются в контейнеры агентов по этому же пути хоста
+      - /tmp/orchestrator:/tmp/orchestrator
+      - agentmanager_keys:/app/keys
+      - agentmanager_data:/app/data
+    ports:
+      - "${AGENTMANAGER_PORT:-8080}:8080"
+    networks:
+      - anymodule
+
+  # ─────────────────────────────────────────────────────────────
+  # Логи (опционально): docker compose --profile logging up -d
+  # ─────────────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:3.0.0
+    profiles: [logging]
+    command: -config.file=/etc/loki/config.yaml
+    volumes:
+      - ./agentmanager/docker/loki/loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    networks:
+      - anymodule
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    profiles: [logging]
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - loki
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./agentmanager/docker/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+    networks:
+      - anymodule
+
+volumes:
+  pg_data:
+  docmodule_storage:
+  repos:
+  agentmanager_keys:
+  agentmanager_data:
+  loki_data:
+
+networks:
+  anymodule:
+    name: anymodule
